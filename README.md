@@ -6,13 +6,11 @@ BizSpec 是一套面向内部 IT、Excel 业务和陌生业务领域的**业务�
 
 ## 无需克隆源码
 
-当前仓库可以直接作为 npm Git 包执行。在需要接入 BizSpec 的项目根目录运行：
+在需要接入 BizSpec 的项目根目录运行：
 
 ```bash
 npx -y github:Hello-DaTang/BizSpec init
 ```
-
-若仓库保持私有，当前电脑需要具备该 GitHub 仓库的访问凭证；仓库公开后可以匿名执行。
 
 指定安装目标并跳过交互：
 
@@ -20,7 +18,7 @@ npx -y github:Hello-DaTang/BizSpec init
 npx -y github:Hello-DaTang/BizSpec init --yes --tools codex,claude
 ```
 
-只安装 Skill，不创建业务工作区：
+只安装 Skill，不创建新的业务节点：
 
 ```bash
 npx -y github:Hello-DaTang/BizSpec install --tools copilot,cursor
@@ -36,15 +34,48 @@ npx -y github:Hello-DaTang/BizSpec update
 
 ## 安装目录
 
-| 工具 | 项目内目录 |
-|---|---|
-| Codex / ChatGPT | `.agents/skills/bizspec` |
-| Claude Code | `.claude/skills/bizspec` |
-| GitHub Copilot | `.github/skills/bizspec` |
-| Cursor | `.cursor/skills/bizspec` |
-| 通用目录 | `.skills/bizspec` |
+| 工具 | 项目内目录 | 说明 |
+|---|---|---|
+| Codex / ChatGPT | `.agents/skills/bizspec` | OpenAI 当前官方仓库级 Skill 目录 |
+| Codex 兼容模式 | `.codex/skills/bizspec` | 兼容 OpenSpec 等仍使用 `.codex/skills` 的工具 |
+| Claude Code | `.claude/skills/bizspec` | Claude 项目 Skill |
+| GitHub Copilot | `.github/skills/bizspec` | Copilot 项目 Skill |
+| Cursor | `.cursor/skills/bizspec` | Cursor 项目 Skill |
+| 通用目录 | `.skills/bizspec` | 其他兼容 Agent Skills 的工具 |
 
-安装选择会记录到 `.bizspec/config.json`，后续 `bizspec update` 会按原目标刷新。
+使用 OpenAI 官方 Codex 目录：
+
+```bash
+npx -y github:Hello-DaTang/BizSpec init --yes --tools codex,copilot
+```
+
+需要与 OpenSpec 的 `.codex/skills` 布局保持一致时：
+
+```bash
+npx -y github:Hello-DaTang/BizSpec init --yes --tools codex-compat,copilot
+```
+
+别名 `codex-legacy` 和 `codex-openspec` 也会解析为 `codex-compat`。
+
+## `bizspec/config.json` 的作用
+
+`config.json` 是 CLI 的安装状态，不是业务需求内容。它记录：
+
+- 当前 BizSpec CLI 版本；
+- 业务工作区目录；
+- 已选择的 AI 工具；
+- 每个 Skill 的安装路径；
+- 安装和更新时间。
+
+这些信息用于安全执行 `update` 和 `uninstall`，避免扫描项目后误删用户自己的目录。
+
+配置现在与业务工作区统一放在：
+
+```text
+bizspec/config.json
+```
+
+旧版本生成的 `.bizspec/config.json` 会在首次执行 `update`、`status` 或其他读取配置的命令时，自动迁移到 `bizspec/config.json`，随后删除根目录 `.bizspec`。
 
 ## CLI 命令
 
@@ -74,13 +105,13 @@ npx -y github:Hello-DaTang/BizSpec set-status BS-01 in_progress --reason "开始
 
 ```text
 当前项目/
-├─ .bizspec/
-│  └─ config.json
-├─ .agents/skills/bizspec/       # 按选择生成
+├─ .agents/skills/bizspec/       # --tools codex
+├─ .codex/skills/bizspec/        # --tools codex-compat，可选
 ├─ .claude/skills/bizspec/       # 按选择生成
 ├─ .github/skills/bizspec/       # 按选择生成
 ├─ .cursor/skills/bizspec/       # 按选择生成
 └─ bizspec/
+   ├─ config.json
    ├─ manifest.yaml
    ├─ sources/
    ├─ nodes/
@@ -110,10 +141,10 @@ npx -y github:Hello-DaTang/BizSpec set-status BS-01 in_progress --reason "开始
 
 ## npm 正式发布
 
-仓库已经包含 `release.yml`。推送版本标签后会：
+仓库包含 `release.yml`。推送与 `package.json` 版本一致的标签后会：
 
 1. 运行 Node.js 测试；
-2. 校验标签与 `package.json` 版本一致；
+2. 校验标签与包版本一致；
 3. 生成 npm tarball；
 4. 创建 GitHub Release；
 5. 当仓库配置了 `NPM_TOKEN` 时发布 `@hello-datang/bizspec`。
