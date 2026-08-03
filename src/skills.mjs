@@ -1,5 +1,5 @@
 import { join, relative, resolve } from 'node:path';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
 import {
   ALL_STANDARD_TOOLS,
   DEFAULT_TOOLS,
@@ -18,8 +18,10 @@ import {
   writeJson,
 } from './files.mjs';
 
-const CONFIG_DIR = '.bizspec';
+const DEFAULT_WORKSPACE = 'bizspec';
 const CONFIG_FILE = 'config.json';
+const LEGACY_CONFIG_DIR = '.bizspec';
+const LEGACY_CONFIG_FILE = 'config.json';
 const SKILL_MARKER = '.bizspec-managed.json';
 
 export function canonicalTool(value) {
@@ -47,6 +49,7 @@ export function normalizeTools(values) {
 export async function detectTools(projectRoot) {
   const detections = [
     ['codex', '.agents'],
+    ['codex-compat', '.codex/skills'],
     ['claude', '.claude'],
     ['copilot', '.github/skills'],
     ['cursor', '.cursor'],
@@ -62,18 +65,67 @@ export function defaultTools() {
   return [...DEFAULT_TOOLS];
 }
 
-function configPath(projectRoot) {
-  return join(projectRoot, CONFIG_DIR, CONFIG_FILE);
+function configPath(projectRoot, workspace = DEFAULT_WORKSPACE) {
+  return join(projectRoot, workspace, CONFIG_FILE);
 }
 
-export async function readConfig(projectRoot) {
-  const path = configPath(projectRoot);
+function legacyConfigPath(projectRoot) {
+  return join(projectRoot, LEGACY_CONFIG_DIR, LEGACY_CONFIG_FILE);
+}
+
+async function readManagedConfig(path) {
   if (!(await exists(path))) return null;
-  return readJson(path);
+  const config = await readJson(path);
+  if (config?.package !== '@hello-datang/bizspec') return null;
+  return config;
+}
+
+async function discoverWorkspaceConfig(projectRoot) {
+  const defaultConfig = await readManagedConfig(configPath(projectRoot));
+  if (defaultConfig) return defaultConfig;
+
+  if (!(await exists(projectRoot))) return null;
+  const entries = await readdir(projectRoot, { withFileTypes: true });
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isDirectory()) continue;
+    if (['.git', 'node_modules', LEGACY_CONFIG_DIR].includes(entry.name)) continue;
+    const config = await readManagedConfig(configPath(projectRoot, entry.name));
+    if (config) return config;
+  }
+  return null;
+}
+
+async function migrateLegacyConfig(projectRoot, requestedWorkspace = null) {
+  const legacyPath = legacyConfigPath(projectRoot);
+  if (!(await exists(legacyPath))) return null;
+
+  const legacy = await readJson(legacyPath);
+  const workspace = requestedWorkspace ?? legacy.workspace ?? DEFAULT_WORKSPACE;
+  const migrated = {
+    ...legacy,
+    workspace,
+    migratedFrom: `${LEGACY_CONFIG_DIR}/${LEGACY_CONFIG_FILE}`,
+    migratedAt: nowIso(),
+  };
+  await writeJson(configPath(projectRoot, workspace), migrated);
+  await removePath(join(projectRoot, LEGACY_CONFIG_DIR));
+  return migrated;
+}
+
+export async function readConfig(projectRoot, workspace = null) {
+  if (workspace) {
+    const direct = await readManagedConfig(configPath(projectRoot, workspace));
+    if (direct) return direct;
+  } else {
+    const discovered = await discoverWorkspaceConfig(projectRoot);
+    if (discovered) return discovered;
+  }
+  return migrateLegacyConfig(projectRoot, workspace);
 }
 
 export async function writeConfig(projectRoot, config) {
-  await writeJson(configPath(projectRoot), config);
+  const workspace = config.workspace ?? DEFAULT_WORKSPACE;
+  await writeJson(configPath(projectRoot, workspace), { ...config, workspace });
 }
 
 async function packageVersion() {
@@ -106,7 +158,7 @@ async function installOneSkill(projectRoot, tool, { force = false } = {}) {
     'bizspec set-status BS-xx <status> --reason "原因"\n' +
     '```\n\n' +
     `若未全局安装，可使用 \`npx -y github:Hello-DaTang/BizSpec <command>\`。` +
-    ` 业务资料位于项目的 BizSpec workspace，更新 Skill 时不得覆盖其中的节点和登记簿。\n`;
+    ` 业务资料和安装器配置都位于项目的 BizSpec workspace；更新 Skill 时不得覆盖其中的节点和登记簿。\n`;
   await writeFile(join(target, 'SKILL.md'), `${sourceSkill.trimEnd()}${cliSection}`, 'utf8');
   await copyTree(join(PACKAGE_ROOT, 'references'), join(target, 'references'));
   await copyTree(join(PACKAGE_ROOT, 'agents'), join(target, 'agents'));
@@ -144,14 +196,15 @@ export async function initializeOrUpdateConfig(projectRoot, {
   installedSkills,
   workspace = null,
 }) {
-  const existing = await readConfig(projectRoot);
+  const existing = await readConfig(projectRoot, workspace);
   const version = await packageVersion();
   const now = nowIso();
+  const resolvedWorkspace = workspace ?? existing?.workspace ?? DEFAULT_WORKSPACE;
   const config = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     package: '@hello-datang/bizspec',
     cliVersion: version,
-    workspace: workspace ?? existing?.workspace ?? null,
+    workspace: resolvedWorkspace,
     tools: normalizeTools(tools),
     installedSkills,
     createdAt: existing?.createdAt ?? now,
@@ -161,10 +214,13 @@ export async function initializeOrUpdateConfig(projectRoot, {
   return config;
 }
 
-export async function updateInstalledSkills(projectRoot, { force = false } = {}) {
-  const config = await readConfig(projectRoot);
+export async function updateInstalledSkills(projectRoot, {
+  force = false,
+  workspace = null,
+} = {}) {
+  const config = await readConfig(projectRoot, workspace);
   if (!config) {
-    throw new Error('No .bizspec/config.json found. Run `bizspec init` or `bizspec install` first.');
+    throw new Error('No BizSpec workspace config found. Run `bizspec init` or `bizspec install` first.');
   }
   const installedSkills = await installSkills(projectRoot, config.tools, { force });
   return initializeOrUpdateConfig(projectRoot, {
@@ -174,8 +230,11 @@ export async function updateInstalledSkills(projectRoot, { force = false } = {})
   });
 }
 
-export async function uninstallSkills(projectRoot, { purge = false } = {}) {
-  const config = await readConfig(projectRoot);
+export async function uninstallSkills(projectRoot, {
+  purge = false,
+  workspace = null,
+} = {}) {
+  const config = await readConfig(projectRoot, workspace);
   if (!config) return { removed: [], workspaceRemoved: false };
   const removed = [];
   for (const item of config.installedSkills ?? []) {
@@ -186,11 +245,15 @@ export async function uninstallSkills(projectRoot, { purge = false } = {}) {
       removed.push(item.path);
     }
   }
+
   let workspaceRemoved = false;
-  if (purge && config.workspace) {
-    await removePath(resolve(projectRoot, config.workspace));
+  const resolvedWorkspace = config.workspace ?? DEFAULT_WORKSPACE;
+  if (purge) {
+    await removePath(resolve(projectRoot, resolvedWorkspace));
     workspaceRemoved = true;
+  } else {
+    await removePath(configPath(projectRoot, resolvedWorkspace));
   }
-  await removePath(join(projectRoot, CONFIG_DIR));
+  await removePath(join(projectRoot, LEGACY_CONFIG_DIR));
   return { removed, workspaceRemoved };
 }

@@ -26,26 +26,32 @@ function usage() {
 
 Usage:
   bizspec init [path] [--title <title>] [--id <id>] [--tools <list>] [--workspace <dir>] [--yes] [--force]
-  bizspec install [path] [--tools <list>] [--yes] [--force]
-  bizspec update [path] [--force]
-  bizspec uninstall [path] [--purge]
-  bizspec status [path]
-  bizspec next [path]
-  bizspec validate [path]
+  bizspec install [path] [--tools <list>] [--workspace <dir>] [--yes] [--force]
+  bizspec update [path] [--workspace <dir>] [--force]
+  bizspec uninstall [path] [--workspace <dir>] [--purge]
+  bizspec status [path] [--workspace <dir>]
+  bizspec next [path] [--workspace <dir>]
+  bizspec validate [path] [--workspace <dir>]
   bizspec set-status [path] <node-id> <status> --reason <text>
   bizspec version
 
 Tools:
-  codex    -> .agents/skills/bizspec
-  claude   -> .claude/skills/bizspec
-  copilot  -> .github/skills/bizspec
-  cursor   -> .cursor/skills/bizspec
-  generic  -> .skills/bizspec
-  all      -> codex, claude, copilot, cursor
+  codex          -> .agents/skills/bizspec (OpenAI official repo-scoped path)
+  codex-compat   -> .codex/skills/bizspec (OpenSpec/legacy compatibility)
+  claude         -> .claude/skills/bizspec
+  copilot        -> .github/skills/bizspec
+  cursor         -> .cursor/skills/bizspec
+  generic        -> .skills/bizspec
+  all            -> codex, claude, copilot, cursor
+
+Project files:
+  bizspec/config.json stores installer state for update/uninstall.
+  Legacy .bizspec/config.json is migrated automatically.
 
 Examples:
   npx -y github:Hello-DaTang/BizSpec init
   npx -y github:Hello-DaTang/BizSpec install --tools codex,claude
+  npx -y github:Hello-DaTang/BizSpec install --tools codex-compat,copilot
   bizspec update
 `;
 }
@@ -93,7 +99,7 @@ async function resolveTools(projectRoot, options) {
   try {
     const hint = detected.length > 0 ? detected.join(',') : defaultTools().join(',');
     const answer = await rl.question(
-      `安装到哪些工具？[codex,claude,copilot,cursor,generic,all]\n` +
+      `安装到哪些工具？[codex,codex-compat,claude,copilot,cursor,generic,all]\n` +
       `直接回车使用 ${hint}: `,
     );
     return normalizeTools([answer.trim() || hint]);
@@ -120,6 +126,7 @@ async function commandInit(args, options) {
 
   console.log(`BizSpec initialized: ${projectRoot}`);
   console.log(`Workspace: ${workspace}`);
+  console.log(`Config: ${workspace}/config.json`);
   console.log(`Skills: ${installedSkills.map((item) => `${item.tool}=${item.path}`).join(', ')}`);
   console.log(workspaceResult.createdManifest
     ? 'Created manifest and missing scaffold files.'
@@ -129,27 +136,37 @@ async function commandInit(args, options) {
 async function commandInstall(args, options) {
   const projectRoot = rootFrom(args[0]);
   const tools = await resolveTools(projectRoot, options);
+  const workspace = options.workspace ? String(options.workspace) : null;
   const installedSkills = await installSkills(projectRoot, tools, { force: Boolean(options.force) });
-  const current = await readConfig(projectRoot);
+  const current = await readConfig(projectRoot, workspace);
   await initializeOrUpdateConfig(projectRoot, {
     tools,
     installedSkills,
-    workspace: current?.workspace ?? null,
+    workspace: workspace ?? current?.workspace ?? 'bizspec',
   });
   console.log(`Installed BizSpec skills: ${installedSkills.map((item) => item.path).join(', ')}`);
 }
 
 async function commandUpdate(args, options) {
   const projectRoot = rootFrom(args[0]);
-  const config = await updateInstalledSkills(projectRoot, { force: Boolean(options.force) });
+  const workspace = options.workspace ? String(options.workspace) : null;
+  const config = await updateInstalledSkills(projectRoot, {
+    force: Boolean(options.force),
+    workspace,
+  });
   console.log(`Updated BizSpec skills to CLI ${config.cliVersion}:`);
   for (const item of config.installedSkills) console.log(`- ${item.tool}: ${item.path}`);
+  console.log(`Installer config: ${config.workspace}/config.json`);
   console.log('Business workspace files were not overwritten.');
 }
 
 async function commandUninstall(args, options) {
   const projectRoot = rootFrom(args[0]);
-  const result = await uninstallSkills(projectRoot, { purge: Boolean(options.purge) });
+  const workspace = options.workspace ? String(options.workspace) : null;
+  const result = await uninstallSkills(projectRoot, {
+    purge: Boolean(options.purge),
+    workspace,
+  });
   if (result.removed.length === 0) console.log('No managed BizSpec skills found.');
   else for (const path of result.removed) console.log(`Removed: ${path}`);
   console.log(result.workspaceRemoved ? 'BizSpec workspace removed.' : 'BizSpec workspace preserved.');

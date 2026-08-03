@@ -29,8 +29,11 @@ export const NODE_CATALOG = [
 export const NODE_BY_ID = new Map(NODE_CATALOG.map((node) => [node.id, node]));
 
 export const TOOL_TARGETS = {
-  claude: '.claude/skills/bizspec',
+  // OpenAI's current repository-scoped skill location.
   codex: '.agents/skills/bizspec',
+  // Compatibility with tools such as OpenSpec that still target .codex/skills.
+  'codex-compat': '.codex/skills/bizspec',
+  claude: '.claude/skills/bizspec',
   copilot: '.github/skills/bizspec',
   cursor: '.cursor/skills/bizspec',
   generic: '.skills/bizspec',
@@ -39,6 +42,8 @@ export const TOOL_TARGETS = {
 export const TOOL_ALIASES = {
   openai: 'codex',
   chatgpt: 'codex',
+  'codex-legacy': 'codex-compat',
+  'codex-openspec': 'codex-compat',
   github: 'copilot',
   'github-copilot': 'copilot',
 };
