@@ -1,0 +1,44 @@
+{
+  "name": "@hello-datang/bizspec",
+  "version": "0.2.0",
+  "description": "Stateful business discovery workflow and project-scoped agent skill installer.",
+  "type": "module",
+  "bin": {
+    "bizspec": "./bin/bizspec.mjs"
+  },
+  "files": [
+    "bin",
+    "src/*.mjs",
+    "SKILL.md",
+    "references",
+    "agents",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "pack:check": "npm pack --dry-run"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "agent-skills",
+    "business-analysis",
+    "requirements",
+    "codex",
+    "claude-code",
+    "github-copilot"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Hello-DaTang/BizSpec.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Hello-DaTang/BizSpec/issues"
+  },
+  "homepage": "https://github.com/Hello-DaTang/BizSpec#readme",
+  "publishConfig": {
+    "access": "public"
+  }
+}

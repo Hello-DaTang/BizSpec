@@ -6,7 +6,25 @@ on:
   pull_request:
 
 jobs:
-  test:
+  node:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm install --ignore-scripts
+      - run: npm test
+      - run: npm run pack:check
+      - name: Smoke test Git-style CLI package
+        run: |
+          node bin/bizspec.mjs init /tmp/bizspec-smoke --yes --tools codex,claude --id smoke --title "Smoke Test"
+          node bin/bizspec.mjs validate /tmp/bizspec-smoke
+          node bin/bizspec.mjs status /tmp/bizspec-smoke
+          node bin/bizspec.mjs next /tmp/bizspec-smoke
+
+  python-legacy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,11 +37,4 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest
-      - name: Run tests
-        run: pytest -q
-      - name: Smoke test CLI
-        run: |
-          python scripts/bizspec.py init /tmp/bizspec-smoke --id smoke --title "Smoke Test"
-          python scripts/bizspec.py validate /tmp/bizspec-smoke
-          python scripts/bizspec.py status /tmp/bizspec-smoke
-          python scripts/bizspec.py next /tmp/bizspec-smoke
+      - run: pytest -q
