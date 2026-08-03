@@ -1,0 +1,6 @@
+interface:
+  display_name: "BizSpec"
+  short_description: "把模糊业务资料转化为有状态、可确认、可进入开发的业务规格"
+  default_prompt: "使用 BizSpec 工作流整理当前业务资料，明确证据、推导、待确认规则、阻塞项和下一节点。"
+policy:
+  allow_implicit_invocation: true
