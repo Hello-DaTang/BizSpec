@@ -1,6 +1,6 @@
 {
   "name": "@hello-datang/bizspec",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Stateful business discovery workflow and project-scoped agent skill installer.",
   "type": "module",
   "bin": {
