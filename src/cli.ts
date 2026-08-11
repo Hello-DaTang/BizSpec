@@ -1,8 +1,15 @@
-import { createInterface } from 'node:readline/promises';
-import { stdin as input, stdout as output } from 'node:process';
-import { resolve } from 'node:path';
 import { readFile } from 'node:fs/promises';
-import { PACKAGE_ROOT } from './files.mjs';
+import { resolve } from 'node:path';
+import { stdin as input, stdout as output } from 'node:process';
+import { createInterface } from 'node:readline/promises';
+import { PACKAGE_ROOT } from './files.js';
+import {
+  initializeWorkspace,
+  nextNode,
+  projectStatus,
+  setNodeStatus,
+  validateProject,
+} from './project.js';
 import {
   defaultTools,
   detectTools,
@@ -12,16 +19,15 @@ import {
   readConfig,
   uninstallSkills,
   updateInstalledSkills,
-} from './skills.mjs';
-import {
-  initializeWorkspace,
-  nextNode,
-  projectStatus,
-  setNodeStatus,
-  validateProject,
-} from './project.mjs';
+} from './skills.js';
+import type { CliOptions, ToolName } from './types.js';
 
-function usage() {
+interface ParsedArgs {
+  positionals: string[];
+  options: CliOptions;
+}
+
+function usage(): string {
   return `BizSpec CLI
 
 Usage:
@@ -56,11 +62,12 @@ Examples:
 `;
 }
 
-function parseArgs(argv) {
-  const positionals = [];
-  const options = {};
+function parseArgs(argv: string[]): ParsedArgs {
+  const positionals: string[] = [];
+  const options: CliOptions = {};
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
+    if (!token) continue;
     if (token === '--') {
       positionals.push(...argv.slice(i + 1));
       break;
@@ -69,8 +76,8 @@ function parseArgs(argv) {
       positionals.push(token);
       continue;
     }
-    const [rawKey, inlineValue] = token.slice(2).split('=', 2);
-    const key = rawKey.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+    const [rawKey = '', inlineValue] = token.slice(2).split('=', 2);
+    const key = rawKey.replace(/-([a-z])/g, (_match, char: string) => char.toUpperCase());
     if (inlineValue !== undefined) {
       options[key] = inlineValue;
       continue;
@@ -86,12 +93,13 @@ function parseArgs(argv) {
   return { positionals, options };
 }
 
-async function version() {
-  return JSON.parse(await readFile(resolve(PACKAGE_ROOT, 'package.json'), 'utf8')).version;
+async function version(): Promise<string> {
+  const pkg = JSON.parse(await readFile(resolve(PACKAGE_ROOT, 'package.json'), 'utf8')) as { version: string };
+  return pkg.version;
 }
 
-async function resolveTools(projectRoot, options) {
-  if (options.tools) return normalizeTools([options.tools]);
+async function resolveTools(projectRoot: string, options: CliOptions): Promise<ToolName[]> {
+  if (typeof options.tools === 'string') return normalizeTools([options.tools]);
   const detected = await detectTools(projectRoot);
   if (options.yes || !process.stdin.isTTY) return detected.length > 0 ? detected : defaultTools();
 
@@ -108,19 +116,23 @@ async function resolveTools(projectRoot, options) {
   }
 }
 
-function rootFrom(value) {
+function rootFrom(value: string | undefined): string {
   return resolve(value || '.');
 }
 
-async function commandInit(args, options) {
+function workspaceOption(options: CliOptions): string | null {
+  return typeof options.workspace === 'string' ? options.workspace : null;
+}
+
+async function commandInit(args: string[], options: CliOptions): Promise<void> {
   const projectRoot = rootFrom(args[0]);
   const tools = await resolveTools(projectRoot, options);
-  const workspace = String(options.workspace || 'bizspec');
+  const workspace = workspaceOption(options) ?? 'bizspec';
   const installedSkills = await installSkills(projectRoot, tools, { force: Boolean(options.force) });
   const workspaceResult = await initializeWorkspace(projectRoot, {
     workspace,
-    id: options.id,
-    title: options.title,
+    id: typeof options.id === 'string' ? options.id : undefined,
+    title: typeof options.title === 'string' ? options.title : undefined,
   });
   await initializeOrUpdateConfig(projectRoot, { tools, installedSkills, workspace });
 
@@ -133,10 +145,10 @@ async function commandInit(args, options) {
     : 'Existing workspace preserved; only missing scaffold files were created.');
 }
 
-async function commandInstall(args, options) {
+async function commandInstall(args: string[], options: CliOptions): Promise<void> {
   const projectRoot = rootFrom(args[0]);
   const tools = await resolveTools(projectRoot, options);
-  const workspace = options.workspace ? String(options.workspace) : null;
+  const workspace = workspaceOption(options);
   const installedSkills = await installSkills(projectRoot, tools, { force: Boolean(options.force) });
   const current = await readConfig(projectRoot, workspace);
   await initializeOrUpdateConfig(projectRoot, {
@@ -147,9 +159,9 @@ async function commandInstall(args, options) {
   console.log(`Installed BizSpec skills: ${installedSkills.map((item) => item.path).join(', ')}`);
 }
 
-async function commandUpdate(args, options) {
+async function commandUpdate(args: string[], options: CliOptions): Promise<void> {
   const projectRoot = rootFrom(args[0]);
-  const workspace = options.workspace ? String(options.workspace) : null;
+  const workspace = workspaceOption(options);
   const config = await updateInstalledSkills(projectRoot, {
     force: Boolean(options.force),
     workspace,
@@ -160,9 +172,9 @@ async function commandUpdate(args, options) {
   console.log('Business workspace files were not overwritten.');
 }
 
-async function commandUninstall(args, options) {
+async function commandUninstall(args: string[], options: CliOptions): Promise<void> {
   const projectRoot = rootFrom(args[0]);
-  const workspace = options.workspace ? String(options.workspace) : null;
+  const workspace = workspaceOption(options);
   const result = await uninstallSkills(projectRoot, {
     purge: Boolean(options.purge),
     workspace,
@@ -172,13 +184,13 @@ async function commandUninstall(args, options) {
   console.log(result.workspaceRemoved ? 'BizSpec workspace removed.' : 'BizSpec workspace preserved.');
 }
 
-async function workspaceFromConfig(projectRoot, options) {
-  if (options.workspace) return String(options.workspace);
+async function workspaceFromConfig(projectRoot: string, options: CliOptions): Promise<string> {
+  if (typeof options.workspace === 'string') return options.workspace;
   const config = await readConfig(projectRoot);
   return config?.workspace || 'bizspec';
 }
 
-async function commandStatus(args, options) {
+async function commandStatus(args: string[], options: CliOptions): Promise<void> {
   const projectRoot = rootFrom(args[0]);
   const workspace = await workspaceFromConfig(projectRoot, options);
   const { project, workflow } = await projectStatus(projectRoot, workspace);
@@ -187,12 +199,12 @@ async function commandStatus(args, options) {
   console.log('ID     STATUS            TITLE');
   console.log('----------------------------------------------------------------');
   for (const node of workflow) {
-    const suffix = (node.blockers ?? []).length ? ` blockers=${node.blockers.length}` : '';
-    console.log(`${String(node.id).padEnd(6)} ${String(node.status).padEnd(17)} ${node.title}${suffix}`);
+    const suffix = node.blockers.length ? ` blockers=${node.blockers.length}` : '';
+    console.log(`${node.id.padEnd(6)} ${node.status.padEnd(17)} ${node.title}${suffix}`);
   }
 }
 
-async function commandNext(args, options) {
+async function commandNext(args: string[], options: CliOptions): Promise<void> {
   const projectRoot = rootFrom(args[0]);
   const workspace = await workspaceFromConfig(projectRoot, options);
   const node = await nextNode(projectRoot, workspace);
@@ -204,7 +216,7 @@ async function commandNext(args, options) {
   console.log(`${node.id} ${node.title} [${node.status}]`);
 }
 
-async function commandValidate(args, options) {
+async function commandValidate(args: string[], options: CliOptions): Promise<void> {
   const projectRoot = rootFrom(args[0]);
   const workspace = await workspaceFromConfig(projectRoot, options);
   const errors = await validateProject(projectRoot, workspace);
@@ -217,23 +229,26 @@ async function commandValidate(args, options) {
   process.exitCode = 1;
 }
 
-async function commandSetStatus(args, options) {
+async function commandSetStatus(args: string[], options: CliOptions): Promise<void> {
   let projectPath = '.';
-  let nodeId;
-  let status;
+  let nodeId: string | undefined;
+  let status: string | undefined;
   if (args[0]?.startsWith('BS-')) {
     [nodeId, status] = args;
   } else {
-    [projectPath, nodeId, status] = args;
+    [projectPath = '.', nodeId, status] = args;
   }
-  if (!nodeId || !status) throw new Error('Usage: bizspec set-status [path] <node-id> <status> --reason <text>');
+  if (!nodeId || !status) {
+    throw new Error('Usage: bizspec set-status [path] <node-id> <status> --reason <text>');
+  }
   const projectRoot = rootFrom(projectPath);
   const workspace = await workspaceFromConfig(projectRoot, options);
-  const result = await setNodeStatus(projectRoot, workspace, nodeId, status, options.reason);
+  const reason = typeof options.reason === 'string' ? options.reason : undefined;
+  const result = await setNodeStatus(projectRoot, workspace, nodeId, status, reason);
   console.log(`${result.nodeId}: ${result.previous} -> ${result.status}`);
 }
 
-export async function main(argv) {
+export async function main(argv: string[]): Promise<void> {
   const { positionals, options } = parseArgs(argv);
   const command = positionals.shift();
   if (!command || command === 'help' || options.help) {

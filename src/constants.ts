@@ -1,6 +1,8 @@
-export const SCHEMA_VERSION = 'bizspec/v1';
+import type { NodeCatalogItem, NodeStatus, ToolName } from './types.js';
 
-export const NODE_STATUSES = new Set([
+export const SCHEMA_VERSION = 'bizspec/v1' as const;
+
+export const NODE_STATUSES: ReadonlySet<NodeStatus> = new Set<NodeStatus>([
   'not_started',
   'in_progress',
   'blocked',
@@ -9,9 +11,12 @@ export const NODE_STATUSES = new Set([
   'waived',
 ]);
 
-export const TERMINAL_NODE_STATUSES = new Set(['done', 'waived']);
+export const TERMINAL_NODE_STATUSES: ReadonlySet<NodeStatus> = new Set<NodeStatus>([
+  'done',
+  'waived',
+]);
 
-export const NODE_CATALOG = [
+export const NODE_CATALOG: readonly NodeCatalogItem[] = [
   { id: 'BS-01', title: '项目范围与业务目标', filename: 'BS-01-scope.md', dependsOn: [] },
   { id: 'BS-02', title: '业务资料与真实案例', filename: 'BS-02-evidence.md', dependsOn: ['BS-01'] },
   { id: 'BS-03', title: '角色与业务责任', filename: 'BS-03-roles.md', dependsOn: ['BS-01'] },
@@ -26,12 +31,12 @@ export const NODE_CATALOG = [
   { id: 'BS-12', title: '开发就绪检查', filename: 'BS-12-readiness.md', dependsOn: ['BS-05', 'BS-07', 'BS-08', 'BS-10', 'BS-11'] },
 ];
 
-export const NODE_BY_ID = new Map(NODE_CATALOG.map((node) => [node.id, node]));
+export const NODE_BY_ID: ReadonlyMap<string, NodeCatalogItem> = new Map(
+  NODE_CATALOG.map((node) => [node.id, node]),
+);
 
-export const TOOL_TARGETS = {
-  // OpenAI's current repository-scoped skill location.
+export const TOOL_TARGETS: Readonly<Record<ToolName, string>> = {
   codex: '.agents/skills/bizspec',
-  // Compatibility with tools such as OpenSpec that still target .codex/skills.
   'codex-compat': '.codex/skills/bizspec',
   claude: '.claude/skills/bizspec',
   copilot: '.github/skills/bizspec',
@@ -39,7 +44,7 @@ export const TOOL_TARGETS = {
   generic: '.skills/bizspec',
 };
 
-export const TOOL_ALIASES = {
+export const TOOL_ALIASES: Readonly<Record<string, ToolName>> = {
   openai: 'codex',
   chatgpt: 'codex',
   'codex-legacy': 'codex-compat',
@@ -48,5 +53,5 @@ export const TOOL_ALIASES = {
   'github-copilot': 'copilot',
 };
 
-export const DEFAULT_TOOLS = ['codex', 'claude'];
-export const ALL_STANDARD_TOOLS = ['codex', 'claude', 'copilot', 'cursor'];
+export const DEFAULT_TOOLS: readonly ToolName[] = ['codex', 'claude'];
+export const ALL_STANDARD_TOOLS: readonly ToolName[] = ['codex', 'claude', 'copilot', 'cursor'];

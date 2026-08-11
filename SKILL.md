@@ -253,4 +253,4 @@ done → in_progress 仅用于规则变化或重新打开
 - `bizspec reopen BS-xx`：记录原因并重新打开；
 - `bizspec export`：仅导出已确认、可追溯的开发输入。
 
-命令可以由 `scripts/bizspec.py` 辅助执行，但 Agent 必须先遵守本 Skill 的证据和状态规则。
+CLI 命令用于机械化状态读写、安装管理与完成条件校验，但 Agent 必须先遵守本 Skill 的证据和状态规则。

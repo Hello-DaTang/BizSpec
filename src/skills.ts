@@ -1,11 +1,11 @@
-import { join, relative, resolve } from 'node:path';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { join, relative, resolve } from 'node:path';
 import {
   ALL_STANDARD_TOOLS,
   DEFAULT_TOOLS,
   TOOL_ALIASES,
   TOOL_TARGETS,
-} from './constants.mjs';
+} from './constants.js';
 import {
   PACKAGE_ROOT,
   copyTree,
@@ -16,20 +16,51 @@ import {
   readJson,
   removePath,
   writeJson,
-} from './files.mjs';
+} from './files.js';
+import type {
+  InstalledSkill,
+  InstallerConfig,
+  SkillInstallOptions,
+  ToolName,
+} from './types.js';
 
 const DEFAULT_WORKSPACE = 'bizspec';
 const CONFIG_FILE = 'config.json';
 const LEGACY_CONFIG_DIR = '.bizspec';
 const LEGACY_CONFIG_FILE = 'config.json';
 const SKILL_MARKER = '.bizspec-managed.json';
+const PACKAGE_NAME = '@hello-datang/bizspec' as const;
 
-export function canonicalTool(value) {
+interface UpdateConfigInput {
+  tools: string[] | ToolName[];
+  installedSkills: InstalledSkill[];
+  workspace?: string | null;
+}
+
+interface UpdateSkillsOptions extends SkillInstallOptions {
+  workspace?: string | null;
+}
+
+interface UninstallOptions {
+  purge?: boolean;
+  workspace?: string | null;
+}
+
+export interface UninstallResult {
+  removed: string[];
+  workspaceRemoved: boolean;
+}
+
+function isToolName(value: string): value is ToolName {
+  return Object.prototype.hasOwnProperty.call(TOOL_TARGETS, value);
+}
+
+export function canonicalTool(value: string): string {
   const normalized = value.trim().toLowerCase();
   return TOOL_ALIASES[normalized] ?? normalized;
 }
 
-export function normalizeTools(values) {
+export function normalizeTools(values: readonly string[]): ToolName[] {
   const flattened = values
     .flatMap((value) => String(value).split(','))
     .map(canonicalTool)
@@ -39,48 +70,53 @@ export function normalizeTools(values) {
     : flattened;
   const unique = [...new Set(expanded)];
   for (const tool of unique) {
-    if (!(tool in TOOL_TARGETS)) {
+    if (!isToolName(tool)) {
       throw new Error(`Unsupported tool: ${tool}. Supported: ${Object.keys(TOOL_TARGETS).join(', ')}, all`);
     }
   }
-  return unique;
+  return unique as ToolName[];
 }
 
-export async function detectTools(projectRoot) {
-  const detections = [
+export async function detectTools(projectRoot: string): Promise<ToolName[]> {
+  const detections: readonly [ToolName, string][] = [
     ['codex', '.agents'],
     ['codex-compat', '.codex/skills'],
     ['claude', '.claude'],
     ['copilot', '.github/skills'],
     ['cursor', '.cursor'],
   ];
-  const result = [];
+  const result: ToolName[] = [];
   for (const [tool, path] of detections) {
     if (await exists(join(projectRoot, path))) result.push(tool);
   }
   return result;
 }
 
-export function defaultTools() {
+export function defaultTools(): ToolName[] {
   return [...DEFAULT_TOOLS];
 }
 
-function configPath(projectRoot, workspace = DEFAULT_WORKSPACE) {
+function configPath(projectRoot: string, workspace = DEFAULT_WORKSPACE): string {
   return join(projectRoot, workspace, CONFIG_FILE);
 }
 
-function legacyConfigPath(projectRoot) {
+function legacyConfigPath(projectRoot: string): string {
   return join(projectRoot, LEGACY_CONFIG_DIR, LEGACY_CONFIG_FILE);
 }
 
-async function readManagedConfig(path) {
-  if (!(await exists(path))) return null;
-  const config = await readJson(path);
-  if (config?.package !== '@hello-datang/bizspec') return null;
-  return config;
+function isManagedConfig(value: unknown): value is InstallerConfig {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return record.package === PACKAGE_NAME && Array.isArray(record.tools) && Array.isArray(record.installedSkills);
 }
 
-async function discoverWorkspaceConfig(projectRoot) {
+async function readManagedConfig(path: string): Promise<InstallerConfig | null> {
+  if (!(await exists(path))) return null;
+  const config = await readJson<unknown>(path);
+  return isManagedConfig(config) ? config : null;
+}
+
+async function discoverWorkspaceConfig(projectRoot: string): Promise<InstallerConfig | null> {
   const defaultConfig = await readManagedConfig(configPath(projectRoot));
   if (defaultConfig) return defaultConfig;
 
@@ -95,24 +131,41 @@ async function discoverWorkspaceConfig(projectRoot) {
   return null;
 }
 
-async function migrateLegacyConfig(projectRoot, requestedWorkspace = null) {
+async function migrateLegacyConfig(
+  projectRoot: string,
+  requestedWorkspace: string | null = null,
+): Promise<InstallerConfig | null> {
   const legacyPath = legacyConfigPath(projectRoot);
   if (!(await exists(legacyPath))) return null;
 
-  const legacy = await readJson(legacyPath);
-  const workspace = requestedWorkspace ?? legacy.workspace ?? DEFAULT_WORKSPACE;
-  const migrated = {
-    ...legacy,
+  const legacy = await readJson<Record<string, unknown>>(legacyPath);
+  if (legacy.package !== PACKAGE_NAME) return null;
+  const workspace = requestedWorkspace ??
+    (typeof legacy.workspace === 'string' && legacy.workspace ? legacy.workspace : DEFAULT_WORKSPACE);
+  const now = nowIso();
+  const migrated: InstallerConfig = {
+    schemaVersion: 2,
+    package: PACKAGE_NAME,
+    cliVersion: typeof legacy.cliVersion === 'string' ? legacy.cliVersion : 'unknown',
     workspace,
+    tools: normalizeTools(Array.isArray(legacy.tools) ? legacy.tools.map(String) : []),
+    installedSkills: Array.isArray(legacy.installedSkills)
+      ? legacy.installedSkills as InstalledSkill[]
+      : [],
+    createdAt: typeof legacy.createdAt === 'string' ? legacy.createdAt : now,
+    updatedAt: typeof legacy.updatedAt === 'string' ? legacy.updatedAt : now,
     migratedFrom: `${LEGACY_CONFIG_DIR}/${LEGACY_CONFIG_FILE}`,
-    migratedAt: nowIso(),
+    migratedAt: now,
   };
   await writeJson(configPath(projectRoot, workspace), migrated);
   await removePath(join(projectRoot, LEGACY_CONFIG_DIR));
   return migrated;
 }
 
-export async function readConfig(projectRoot, workspace = null) {
+export async function readConfig(
+  projectRoot: string,
+  workspace: string | null = null,
+): Promise<InstallerConfig | null> {
   if (workspace) {
     const direct = await readManagedConfig(configPath(projectRoot, workspace));
     if (direct) return direct;
@@ -123,17 +176,21 @@ export async function readConfig(projectRoot, workspace = null) {
   return migrateLegacyConfig(projectRoot, workspace);
 }
 
-export async function writeConfig(projectRoot, config) {
+export async function writeConfig(projectRoot: string, config: InstallerConfig): Promise<void> {
   const workspace = config.workspace ?? DEFAULT_WORKSPACE;
   await writeJson(configPath(projectRoot, workspace), { ...config, workspace });
 }
 
-async function packageVersion() {
-  const pkg = JSON.parse(await readFile(join(PACKAGE_ROOT, 'package.json'), 'utf8'));
+async function packageVersion(): Promise<string> {
+  const pkg = JSON.parse(await readFile(join(PACKAGE_ROOT, 'package.json'), 'utf8')) as { version: string };
   return pkg.version;
 }
 
-async function installOneSkill(projectRoot, tool, { force = false } = {}) {
+async function installOneSkill(
+  projectRoot: string,
+  tool: ToolName,
+  { force = false }: SkillInstallOptions = {},
+): Promise<InstalledSkill> {
   const relativeTarget = TOOL_TARGETS[tool];
   const target = resolve(projectRoot, relativeTarget);
   const markerPath = join(target, SKILL_MARKER);
@@ -167,7 +224,7 @@ async function installOneSkill(projectRoot, tool, { force = false } = {}) {
   const files = (await listFiles(target)).filter((path) => path !== SKILL_MARKER);
   await writeJson(markerPath, {
     schemaVersion: 1,
-    package: '@hello-datang/bizspec',
+    package: PACKAGE_NAME,
     version,
     tool,
     installedAt: nowIso(),
@@ -181,28 +238,31 @@ async function installOneSkill(projectRoot, tool, { force = false } = {}) {
   };
 }
 
-export async function installSkills(projectRoot, tools, options = {}) {
+export async function installSkills(
+  projectRoot: string,
+  tools: readonly string[],
+  options: SkillInstallOptions = {},
+): Promise<InstalledSkill[]> {
   const normalized = normalizeTools(tools);
   if (normalized.length === 0) throw new Error('At least one tool must be selected.');
-  const installed = [];
+  const installed: InstalledSkill[] = [];
   for (const tool of normalized) {
     installed.push(await installOneSkill(projectRoot, tool, options));
   }
   return installed;
 }
 
-export async function initializeOrUpdateConfig(projectRoot, {
-  tools,
-  installedSkills,
-  workspace = null,
-}) {
+export async function initializeOrUpdateConfig(
+  projectRoot: string,
+  { tools, installedSkills, workspace = null }: UpdateConfigInput,
+): Promise<InstallerConfig> {
   const existing = await readConfig(projectRoot, workspace);
   const version = await packageVersion();
   const now = nowIso();
   const resolvedWorkspace = workspace ?? existing?.workspace ?? DEFAULT_WORKSPACE;
-  const config = {
+  const config: InstallerConfig = {
     schemaVersion: 2,
-    package: '@hello-datang/bizspec',
+    package: PACKAGE_NAME,
     cliVersion: version,
     workspace: resolvedWorkspace,
     tools: normalizeTools(tools),
@@ -214,10 +274,10 @@ export async function initializeOrUpdateConfig(projectRoot, {
   return config;
 }
 
-export async function updateInstalledSkills(projectRoot, {
-  force = false,
-  workspace = null,
-} = {}) {
+export async function updateInstalledSkills(
+  projectRoot: string,
+  { force = false, workspace = null }: UpdateSkillsOptions = {},
+): Promise<InstallerConfig> {
   const config = await readConfig(projectRoot, workspace);
   if (!config) {
     throw new Error('No BizSpec workspace config found. Run `bizspec init` or `bizspec install` first.');
@@ -230,13 +290,13 @@ export async function updateInstalledSkills(projectRoot, {
   });
 }
 
-export async function uninstallSkills(projectRoot, {
-  purge = false,
-  workspace = null,
-} = {}) {
+export async function uninstallSkills(
+  projectRoot: string,
+  { purge = false, workspace = null }: UninstallOptions = {},
+): Promise<UninstallResult> {
   const config = await readConfig(projectRoot, workspace);
   if (!config) return { removed: [], workspaceRemoved: false };
-  const removed = [];
+  const removed: string[] = [];
   for (const item of config.installedSkills ?? []) {
     const target = resolve(projectRoot, item.path);
     const marker = join(target, SKILL_MARKER);

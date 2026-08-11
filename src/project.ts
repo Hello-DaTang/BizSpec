@@ -1,12 +1,12 @@
-import { join, resolve } from 'node:path';
 import { readFile, writeFile } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import {
   NODE_BY_ID,
   NODE_CATALOG,
   NODE_STATUSES,
   SCHEMA_VERSION,
   TERMINAL_NODE_STATUSES,
-} from './constants.mjs';
+} from './constants.js';
 import {
   ensureDir,
   exists,
@@ -15,9 +15,18 @@ import {
   readYaml,
   renderFrontMatter,
   writeYaml,
-} from './files.mjs';
+} from './files.js';
+import type {
+  CompletionCheck,
+  Manifest,
+  NodeCatalogItem,
+  NodeMeta,
+  NodeStatus,
+  ProjectInfo,
+  WorkflowNode,
+} from './types.js';
 
-const COMPLETION_KEYS = [
+const COMPLETION_KEYS: readonly (keyof CompletionCheck)[] = [
   'required_sections_present',
   'required_outputs_present',
   'critical_items_have_owner',
@@ -25,7 +34,24 @@ const COMPLETION_KEYS = [
   'reviewer_confirmed',
 ];
 
-function nodeMeta(node) {
+interface InitializeWorkspaceOptions {
+  workspace?: string;
+  id?: string;
+  title?: string;
+}
+
+export interface WorkspaceInitResult {
+  root: string;
+  createdManifest: boolean;
+  createdNodes: number;
+}
+
+export interface ProjectStatusResult {
+  project: ProjectInfo;
+  workflow: WorkflowNode[];
+}
+
+function nodeMeta(node: NodeCatalogItem): NodeMeta {
   return {
     id: node.id,
     title: node.title,
@@ -47,7 +73,7 @@ function nodeMeta(node) {
   };
 }
 
-function nodeBody(node) {
+function nodeBody(node: NodeCatalogItem): string {
   return `# ${node.title}\n\n` +
     '## 节点目标\n\n待补充。\n\n' +
     '## 当前结论\n\n暂无。\n\n' +
@@ -65,19 +91,22 @@ function nodeBody(node) {
     '## 状态变更记录\n\n暂无。\n';
 }
 
-function renderNode(node) {
+function renderNode(node: NodeCatalogItem): string {
   return renderFrontMatter(nodeMeta(node), nodeBody(node));
 }
 
-export function workspacePath(projectRoot, workspace = 'bizspec') {
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function workspacePath(projectRoot: string, workspace = 'bizspec'): string {
   return resolve(projectRoot, workspace);
 }
 
-export async function initializeWorkspace(projectRoot, {
-  workspace = 'bizspec',
-  id,
-  title,
-} = {}) {
+export async function initializeWorkspace(
+  projectRoot: string,
+  { workspace = 'bizspec', id, title }: InitializeWorkspaceOptions = {},
+): Promise<WorkspaceInitResult> {
   const root = workspacePath(projectRoot, workspace);
   const paths = {
     root,
@@ -87,14 +116,15 @@ export async function initializeWorkspace(projectRoot, {
     registers: join(root, 'registers'),
     generated: join(root, 'generated'),
   };
-  for (const path of Object.values(paths).filter((value) => value !== paths.manifest)) {
+
+  for (const path of [paths.root, paths.nodes, paths.sources, paths.registers, paths.generated]) {
     await ensureDir(path);
   }
 
   let createdManifest = false;
   if (!(await exists(paths.manifest))) {
     const timestamp = nowIso();
-    const manifest = {
+    const manifest: Manifest = {
       schema_version: SCHEMA_VERSION,
       project: {
         id: id || 'bizspec-project',
@@ -104,7 +134,7 @@ export async function initializeWorkspace(projectRoot, {
         updated_at: timestamp,
       },
       sources: [],
-      workflow: NODE_CATALOG.map((node) => ({
+      workflow: NODE_CATALOG.map<WorkflowNode>((node) => ({
         id: node.id,
         title: node.title,
         status: 'not_started',
@@ -129,7 +159,7 @@ export async function initializeWorkspace(projectRoot, {
     }
   }
 
-  const registers = [
+  const registers: readonly [string, Record<string, unknown>][] = [
     ['rules.yaml', { schema_version: SCHEMA_VERSION, rules: [] }],
     ['questions.yaml', { schema_version: SCHEMA_VERSION, questions: [] }],
     ['decisions.yaml', { schema_version: SCHEMA_VERSION, decisions: [] }],
@@ -142,39 +172,51 @@ export async function initializeWorkspace(projectRoot, {
   return { root, createdManifest, createdNodes };
 }
 
-export async function loadManifest(projectRoot, workspace = 'bizspec') {
+export async function loadManifest(
+  projectRoot: string,
+  workspace = 'bizspec',
+): Promise<{ root: string; path: string; manifest: Manifest }> {
   const root = workspacePath(projectRoot, workspace);
   const path = join(root, 'manifest.yaml');
   if (!(await exists(path))) throw new Error(`Missing BizSpec manifest: ${path}`);
-  return { root, path, manifest: await readYaml(path) };
+  return { root, path, manifest: await readYaml<Manifest>(path) };
 }
 
-function workflowIndex(manifest) {
+function workflowIndex(manifest: Manifest): Map<string, WorkflowNode> {
   if (!Array.isArray(manifest.workflow)) throw new Error('manifest.workflow must be a list');
   return new Map(manifest.workflow.map((node) => [node.id, node]));
 }
 
-export async function projectStatus(projectRoot, workspace = 'bizspec') {
+export async function projectStatus(
+  projectRoot: string,
+  workspace = 'bizspec',
+): Promise<ProjectStatusResult> {
   const { manifest } = await loadManifest(projectRoot, workspace);
   return {
-    project: manifest.project ?? {},
-    workflow: manifest.workflow ?? [],
+    project: manifest.project,
+    workflow: manifest.workflow,
   };
 }
 
-export async function nextNode(projectRoot, workspace = 'bizspec') {
+export async function nextNode(
+  projectRoot: string,
+  workspace = 'bizspec',
+): Promise<WorkflowNode | null> {
   const { manifest } = await loadManifest(projectRoot, workspace);
   const index = workflowIndex(manifest);
-  const priorities = new Map([
+  const priorities = new Map<NodeStatus, number>([
     ['in_progress', 0],
     ['review_required', 1],
     ['not_started', 2],
     ['blocked', 3],
   ]);
-  const candidates = (manifest.workflow ?? []).filter((node) => {
+  const candidates = manifest.workflow.filter((node) => {
     if (TERMINAL_NODE_STATUSES.has(node.status)) return false;
-    if ((node.blockers ?? []).length > 0) return false;
-    return (node.depends_on ?? []).every((id) => TERMINAL_NODE_STATUSES.has(index.get(id)?.status));
+    if (node.blockers.length > 0) return false;
+    return node.depends_on.every((id) => {
+      const dependency = index.get(id);
+      return dependency ? TERMINAL_NODE_STATUSES.has(dependency.status) : false;
+    });
   });
   candidates.sort((a, b) =>
     (priorities.get(a.status) ?? 9) - (priorities.get(b.status) ?? 9) || a.id.localeCompare(b.id),
@@ -182,32 +224,32 @@ export async function nextNode(projectRoot, workspace = 'bizspec') {
   return candidates[0] ?? null;
 }
 
-function completionErrors(meta) {
-  const errors = [];
+function completionErrors(meta: NodeMeta): string[] {
+  const errors: string[] = [];
   const checks = meta.completion_check;
   if (!checks || typeof checks !== 'object') return ['completion_check must be a mapping'];
   for (const key of COMPLETION_KEYS) {
     if (checks[key] !== true) errors.push(`completion_check.${key} must be true`);
   }
-  if ((meta.blockers ?? []).length > 0) errors.push('blockers must be empty before status=done');
+  if (meta.blockers.length > 0) errors.push('blockers must be empty before status=done');
   return errors;
 }
 
-export async function validateProject(projectRoot, workspace = 'bizspec') {
+export async function validateProject(projectRoot: string, workspace = 'bizspec'): Promise<string[]> {
   const { root, manifest } = await loadManifest(projectRoot, workspace);
-  const errors = [];
+  const errors: string[] = [];
   if (manifest.schema_version !== SCHEMA_VERSION) {
     errors.push(`manifest.schema_version must be ${SCHEMA_VERSION}`);
   }
   if (!manifest.project?.id) errors.push('manifest.project.id is required');
   if (!manifest.project?.title) errors.push('manifest.project.title is required');
 
-  let index;
+  let index: Map<string, WorkflowNode>;
   try {
     index = workflowIndex(manifest);
   } catch (error) {
-    errors.push(error.message);
-    index = new Map();
+    errors.push(toErrorMessage(error));
+    index = new Map<string, WorkflowNode>();
   }
 
   for (const expected of NODE_CATALOG) {
@@ -224,7 +266,7 @@ export async function validateProject(projectRoot, workspace = 'bizspec') {
       continue;
     }
     try {
-      const { meta } = parseFrontMatter(await readFile(nodePath, 'utf8'));
+      const { meta } = parseFrontMatter<NodeMeta>(await readFile(nodePath, 'utf8'));
       if (meta.id !== expected.id) errors.push(`${expected.filename}: id mismatch`);
       if (meta.title !== expected.title) errors.push(`${expected.filename}: title mismatch`);
       if (meta.status !== item.status) errors.push(`${expected.filename}: status differs from manifest`);
@@ -232,43 +274,50 @@ export async function validateProject(projectRoot, workspace = 'bizspec') {
         for (const message of completionErrors(meta)) errors.push(`${expected.id}: ${message}`);
       }
     } catch (error) {
-      errors.push(`${expected.filename}: ${error.message}`);
+      errors.push(`${expected.filename}: ${toErrorMessage(error)}`);
     }
   }
   return errors;
 }
 
-export async function setNodeStatus(projectRoot, workspace, nodeId, status, reason) {
-  if (!NODE_STATUSES.has(status)) throw new Error(`Invalid node status: ${status}`);
+export async function setNodeStatus(
+  projectRoot: string,
+  workspace: string,
+  nodeId: string,
+  status: string,
+  reason: string | undefined,
+): Promise<{ nodeId: string; previous: NodeStatus; status: NodeStatus }> {
+  if (!NODE_STATUSES.has(status as NodeStatus)) throw new Error(`Invalid node status: ${status}`);
   if (!reason?.trim()) throw new Error('--reason is required for every status change');
+  const nextStatus = status as NodeStatus;
   const expected = NODE_BY_ID.get(nodeId);
   if (!expected) throw new Error(`Unknown node: ${nodeId}`);
 
   const { root, path: manifestPath, manifest } = await loadManifest(projectRoot, workspace);
-  const item = (manifest.workflow ?? []).find((node) => node.id === nodeId);
+  const item = manifest.workflow.find((node) => node.id === nodeId);
   if (!item) throw new Error(`Node missing from manifest: ${nodeId}`);
   const nodePath = join(root, 'nodes', expected.filename);
   const text = await readFile(nodePath, 'utf8');
-  const { meta, body } = parseFrontMatter(text);
-  if (status === 'done') {
+  const { meta, body } = parseFrontMatter<NodeMeta>(text);
+  if (nextStatus === 'done') {
     const errors = completionErrors(meta);
     if (errors.length > 0) throw new Error(`Cannot mark ${nodeId} done:\n- ${errors.join('\n- ')}`);
   }
 
   const timestamp = nowIso();
   const previous = item.status;
-  item.status = status;
+  item.status = nextStatus;
   item.updated_at = timestamp;
   item.history = Array.isArray(item.history) ? item.history : [];
-  item.history.push({ at: timestamp, from: previous, to: status, reason });
+  item.history.push({ at: timestamp, from: previous, to: nextStatus, reason });
   manifest.project.updated_at = timestamp;
-  meta.status = status;
+  meta.status = nextStatus;
   meta.updated_at = timestamp;
   await writeYaml(manifestPath, manifest);
   await writeFile(
     nodePath,
-    renderFrontMatter(meta, `${body.trimEnd()}\n\n- ${timestamp}: ${previous} → ${status}；${reason}\n`),
+    renderFrontMatter(meta, `${body.trimEnd()}\n\n- ${timestamp}: ${previous} → ${nextStatus}；${reason}\n`),
     'utf8',
   );
-  return { nodeId, previous, status };
+  return { nodeId, previous, status: nextStatus };
 }

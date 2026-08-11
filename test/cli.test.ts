@@ -1,12 +1,13 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { main } from '../src/cli.mjs';
-import { exists, parseFrontMatter, readJson, readYaml } from '../src/files.mjs';
+import { join } from 'node:path';
+import test from 'node:test';
+import { main } from '../src/cli.js';
+import { exists, parseFrontMatter, readJson, readYaml } from '../src/files.js';
+import type { InstallerConfig, Manifest, NodeMeta } from '../src/types.js';
 
-async function withTempProject(run) {
+async function withTempProject(run: (root: string) => Promise<void>): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'bizspec-node-'));
   try {
     await run(root);
@@ -20,10 +21,10 @@ test('init installs selected skills and creates 12-node workspace', async () => 
     await main(['init', root, '--yes', '--tools', 'codex,claude', '--id', 'demo', '--title', '演示项目']);
     assert.equal(await exists(join(root, '.agents/skills/bizspec/SKILL.md')), true);
     assert.equal(await exists(join(root, '.claude/skills/bizspec/SKILL.md')), true);
-    const config = await readJson(join(root, 'bizspec/config.json'));
+    const config = await readJson<InstallerConfig>(join(root, 'bizspec/config.json'));
     assert.deepEqual(config.tools, ['codex', 'claude']);
     assert.equal(config.schemaVersion, 2);
-    const manifest = await readYaml(join(root, 'bizspec/manifest.yaml'));
+    const manifest = await readYaml<Manifest>(join(root, 'bizspec/manifest.yaml'));
     assert.equal(manifest.project.id, 'demo');
     assert.equal(manifest.project.title, '演示项目');
     assert.equal(manifest.workflow.length, 12);
@@ -34,7 +35,7 @@ test('codex compatibility target installs into .codex/skills', async () => {
   await withTempProject(async (root) => {
     await main(['init', root, '--yes', '--tools', 'codex-compat']);
     assert.equal(await exists(join(root, '.codex/skills/bizspec/SKILL.md')), true);
-    const config = await readJson(join(root, 'bizspec/config.json'));
+    const config = await readJson<InstallerConfig>(join(root, 'bizspec/config.json'));
     assert.deepEqual(config.tools, ['codex-compat']);
   });
 });
@@ -65,7 +66,7 @@ test('legacy .bizspec config migrates into the business workspace', async () => 
 
     assert.equal(await exists(join(root, '.bizspec')), false);
     assert.equal(await exists(currentConfigPath), true);
-    const migrated = await readJson(currentConfigPath);
+    const migrated = await readJson<InstallerConfig>(currentConfigPath);
     assert.equal(migrated.workspace, 'bizspec');
     assert.equal(migrated.schemaVersion, 2);
   });
@@ -73,10 +74,13 @@ test('legacy .bizspec config migrates into the business workspace', async () => 
 
 test('validation passes for a fresh workspace', async () => {
   await withTempProject(async (root) => {
+    process.exitCode = 0;
     await main(['init', root, '--yes', '--tools', 'codex']);
-    const manifest = await readYaml(join(root, 'bizspec/manifest.yaml'));
-    assert.equal(manifest.workflow[0].title, '项目范围与业务目标');
-    const node = parseFrontMatter(await readFile(join(root, 'bizspec/nodes/BS-01-scope.md'), 'utf8'));
+    const manifest = await readYaml<Manifest>(join(root, 'bizspec/manifest.yaml'));
+    assert.equal(manifest.workflow[0]?.title, '项目范围与业务目标');
+    const node = parseFrontMatter<NodeMeta>(
+      await readFile(join(root, 'bizspec/nodes/BS-01-scope.md'), 'utf8'),
+    );
     assert.equal(node.meta.status, 'not_started');
     await main(['validate', root]);
     assert.notEqual(process.exitCode, 1);
@@ -91,8 +95,8 @@ test('done status is rejected until completion gates pass', async () => {
       /Cannot mark BS-01 done/,
     );
     await main(['set-status', root, 'BS-01', 'in_progress', '--reason', '开始调研']);
-    const manifest = await readYaml(join(root, 'bizspec/manifest.yaml'));
-    assert.equal(manifest.workflow[0].status, 'in_progress');
+    const manifest = await readYaml<Manifest>(join(root, 'bizspec/manifest.yaml'));
+    assert.equal(manifest.workflow[0]?.status, 'in_progress');
   });
 });
 

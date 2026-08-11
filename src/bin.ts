@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { main } from '../src/cli.mjs';
+import { main } from './cli.js';
 
-main(process.argv.slice(2)).catch((error) => {
+main(process.argv.slice(2)).catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`BizSpec error: ${message}`);
   process.exitCode = 1;
