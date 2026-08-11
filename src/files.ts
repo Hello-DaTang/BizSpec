@@ -1,10 +1,31 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseYaml, stringifyYaml } from './yaml-lite.js';
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
-export const PACKAGE_ROOT = resolve(SRC_DIR, '..');
+
+function findPackageRoot(start: string): string {
+  let current = start;
+  while (true) {
+    const packageJson = join(current, 'package.json');
+    if (existsSync(packageJson)) {
+      try {
+        const pkg = JSON.parse(readFileSync(packageJson, 'utf8')) as { name?: string };
+        if (pkg.name === '@hello-datang/bizspec') return current;
+      } catch {
+        // Keep walking upward. A parent package.json may belong to another package.
+      }
+    }
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  throw new Error(`Unable to locate @hello-datang/bizspec package root from ${start}`);
+}
+
+export const PACKAGE_ROOT = findPackageRoot(SRC_DIR);
 
 export async function exists(path: string): Promise<boolean> {
   try {
