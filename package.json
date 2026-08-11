@@ -1,25 +1,33 @@
 {
   "name": "@hello-datang/bizspec",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Stateful business discovery workflow and project-scoped agent skill installer.",
   "type": "module",
   "bin": {
-    "bizspec": "./bin/bizspec.mjs"
+    "bizspec": "./dist/bin.js"
   },
   "files": [
-    "bin",
-    "src/*.mjs",
+    "dist",
     "SKILL.md",
     "references",
     "agents",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true});require('node:fs').rmSync('.test-dist',{recursive:true,force:true})\"",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.test.json --noEmit",
+    "test:compile": "node -e \"require('node:fs').rmSync('.test-dist',{recursive:true,force:true})\" && tsc -p tsconfig.test.json",
+    "test": "npm run typecheck && npm run test:compile && node --test .test-dist/test/cli.test.js",
+    "prepare": "npm run build",
     "pack:check": "npm pack --dry-run"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "typescript": "^6.0.3"
   },
   "keywords": [
     "agent-skills",
@@ -27,7 +35,8 @@
     "requirements",
     "codex",
     "claude-code",
-    "github-copilot"
+    "github-copilot",
+    "typescript"
   ],
   "license": "MIT",
   "repository": {
